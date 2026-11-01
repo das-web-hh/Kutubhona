@@ -1,0 +1,54 @@
+name: Decompile and rebuild APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download apktool and jadx
+        run: |
+          wget -q https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar -O apktool.jar
+          wget -q https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip -O jadx.zip
+          unzip -q jadx.zip -d jadx
+
+      - name: Decode APK (resources + smali) - buildable project
+        run: java -jar apktool.jar d Kutubxona_1.apk -o decoded -f
+
+      - name: Decompile to Java (read-only, for reference)
+        run: jadx/bin/jadx -d java_src --show-bad-code Kutubxona_1.apk || true
+
+      - name: Rebuild APK from decoded project
+        run: java -jar apktool.jar b decoded -o rebuilt_unsigned.apk
+
+      - name: Align and sign (debug key)
+        run: |
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/zipalign -f -p 4 rebuilt_unsigned.apk rebuilt_aligned.apk
+          keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+            -alias debug -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Debug"
+          $BT/apksigner sign --ks debug.keystore --ks-pass pass:android \
+            --out Kutubxona_rebuilt.apk rebuilt_aligned.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decoded-project
+          path: decoded
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-sources
+          path: java_src
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-apk
+          path: Kutubxona_rebuilt.apk
